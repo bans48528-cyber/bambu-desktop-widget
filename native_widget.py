@@ -68,6 +68,10 @@ SWP_NOACTIVATE = 0x0010
 SWP_FRAMECHANGED = 0x0020
 SWP_SHOWWINDOW = 0x0040
 
+MB_OK = 0x00000000
+MB_ICONINFORMATION = 0x00000040
+MB_SETFOREGROUND = 0x00010000
+
 HWND_TOP = 0
 ERROR_ALREADY_EXISTS = 183
 MUTEX_NAME = "Local\\BambuNativeWidget-6E318C1D-4BDB-4CC3-9D48-6FDC3B856E94"
@@ -204,6 +208,8 @@ def configure_ctypes():
     user32.GetWindowRect.restype = wintypes.BOOL
     user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
     user32.GetClientRect.restype = wintypes.BOOL
+    user32.MessageBoxW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.UINT]
+    user32.MessageBoxW.restype = ctypes.c_int
     user32.SetLayeredWindowAttributes.argtypes = [wintypes.HWND, wintypes.COLORREF, wintypes.BYTE, wintypes.DWORD]
     user32.SetLayeredWindowAttributes.restype = wintypes.BOOL
     user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
@@ -533,6 +539,8 @@ class NativeWidget:
             "job_name": self.config.get("printer_name", "Bambu"),
         }
         self.connection_text = "未连接"
+        self.seen_printer_status = False
+        self.last_print_state = None
         self.hwnd = None
         self.drag_mode = None
         self.drag_origin = None
@@ -721,6 +729,29 @@ class NativeWidget:
             self.apply_visual_config()
             user32.InvalidateRect(self.hwnd, None, True)
 
+    def show_completion_popup(self, status):
+        job_name = str(status.get("job_name") or self.config.get("printer_name", "Bambu")).strip()
+        if not job_name:
+            job_name = self.config.get("printer_name", "Bambu")
+        message = f"{job_name}\n\n打印已完成。"
+        title = "打印完成"
+
+        def worker():
+            user32.MessageBoxW(None, message, title, MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def handle_status_update(self, payload):
+        current_state = str(payload.get("state") or "").upper()
+        previous_state = self.last_print_state
+
+        if self.seen_printer_status and current_state == "FINISH" and previous_state != "FINISH":
+            self.show_completion_popup(payload)
+
+        self.seen_printer_status = True
+        self.last_print_state = current_state
+        self.status = payload
+
     def pump_events(self):
         changed = False
         while True:
@@ -745,7 +776,7 @@ class NativeWidget:
                 }
                 changed = True
             elif kind == "status":
-                self.status = payload
+                self.handle_status_update(payload)
                 changed = True
         return changed
 
