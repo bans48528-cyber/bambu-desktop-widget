@@ -1,0 +1,29 @@
+{
+  "printer_ip": "192.168.1.100",
+  "serial": "YOUR_PRINTER_SERIAL",
+  "access_code": "YOUR_ACCESS_CODE",
+  "printer_name": "Bambu Lab Printer",
+  "remaining_time_unit": "minutes",
+  "opacity": 0.94,
+  "font_size": 14,
+  "window": {
+    "x": 80,
+    "y": 80,
+    "width": 330,
+    "height": 172
+  },
+  "mqtt": {
+    "port": 8883,
+    "username": "bblp",
+    "connection_timeout_seconds": 4,
+    "keepalive_seconds": 30,
+    "reconnect_seconds": 8,
+    "pushall_interval_seconds": 60
+  },
+  "discovery": {
+    "enabled": true,
+    "timeout_seconds": 3,
+    "scan_fallback": true,
+    "scan_timeout_seconds": 4
+  }
+}
