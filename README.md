@@ -10,7 +10,7 @@ Windows desktop widget for showing Bambu Lab printer status through local MQTT.
 - Supports configurable opacity and base font size
 - Uses local MQTT connection on port `8883`
 - Can try cached IP first, then discover the printer again when the IP changes
-- Shows a lightweight completion popup when a print finishes
+- Shows a lightweight in-widget completion notice when a print finishes
 
 ## Start
 

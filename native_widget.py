@@ -68,10 +68,6 @@ SWP_NOACTIVATE = 0x0010
 SWP_FRAMECHANGED = 0x0020
 SWP_SHOWWINDOW = 0x0040
 
-MB_OK = 0x00000000
-MB_ICONINFORMATION = 0x00000040
-MB_SETFOREGROUND = 0x00010000
-
 HWND_TOP = 0
 ERROR_ALREADY_EXISTS = 183
 MUTEX_NAME = "Local\\BambuNativeWidget-6E318C1D-4BDB-4CC3-9D48-6FDC3B856E94"
@@ -94,6 +90,7 @@ TIMER_MAIN = 1
 ID_MENU_SETTINGS = 1001
 ID_MENU_RECONNECT = 1002
 ID_MENU_EXIT = 1003
+ID_MENU_TEST_COMPLETE = 1004
 LOG_PATH = APP_DIR / "startup.log"
 
 WNDPROC = ctypes.WINFUNCTYPE(
@@ -208,8 +205,6 @@ def configure_ctypes():
     user32.GetWindowRect.restype = wintypes.BOOL
     user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
     user32.GetClientRect.restype = wintypes.BOOL
-    user32.MessageBoxW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.UINT]
-    user32.MessageBoxW.restype = ctypes.c_int
     user32.SetLayeredWindowAttributes.argtypes = [wintypes.HWND, wintypes.COLORREF, wintypes.BYTE, wintypes.DWORD]
     user32.SetLayeredWindowAttributes.restype = wintypes.BOOL
     user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
@@ -541,6 +536,8 @@ class NativeWidget:
         self.connection_text = "未连接"
         self.seen_printer_status = False
         self.last_print_state = None
+        self.completion_notice_text = ""
+        self.completion_notice_until = 0.0
         self.hwnd = None
         self.drag_mode = None
         self.drag_origin = None
@@ -733,13 +730,23 @@ class NativeWidget:
         job_name = str(status.get("job_name") or self.config.get("printer_name", "Bambu")).strip()
         if not job_name:
             job_name = self.config.get("printer_name", "Bambu")
+        self.completion_notice_text = job_name
+        self.completion_notice_until = time.monotonic() + 8.0
+        user32.InvalidateRect(self.hwnd, None, True)
+        return
         message = f"{job_name}\n\n打印已完成。"
         title = "打印完成"
 
         def worker():
-            user32.MessageBoxW(None, message, title, MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND)
+            user32.MessageBoxW(None, message, title, MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND | MB_TOPMOST)
 
         threading.Thread(target=worker, daemon=True).start()
+
+    def clear_expired_completion_notice(self):
+        if self.completion_notice_until and time.monotonic() >= self.completion_notice_until:
+            self.completion_notice_text = ""
+            self.completion_notice_until = 0.0
+            user32.InvalidateRect(self.hwnd, None, True)
 
     def handle_status_update(self, payload):
         current_state = str(payload.get("state") or "").upper()
@@ -941,12 +948,16 @@ class NativeWidget:
         script = APP_DIR / "settings_dialog.py"
         subprocess.Popen([sys.executable, str(script)], cwd=str(APP_DIR))
 
+    def test_completion_notice(self):
+        self.show_completion_popup({"job_name": "测试打印任务"})
+
     def show_menu(self, x, y):
         user32.SetForegroundWindow(self.hwnd)
         menu = user32.CreatePopupMenu()
         user32.AppendMenuW(menu, MF_STRING, ID_MENU_SETTINGS, "打开配置")
         user32.AppendMenuW(menu, MF_STRING, ID_MENU_RECONNECT, "重新连接")
         user32.AppendMenuW(menu, MF_STRING, ID_MENU_EXIT, "退出")
+        user32.AppendMenuW(menu, MF_STRING, ID_MENU_TEST_COMPLETE, "测试完成提示")
         user32.TrackPopupMenu(menu, TPM_RIGHTBUTTON, x, y, 0, self.hwnd, None)
         user32.DestroyMenu(menu)
 
@@ -965,6 +976,7 @@ class NativeWidget:
         self.draw_details(hdc, rect, mode)
         if mode != "mini":
             self.draw_connection(hdc, rect)
+        self.draw_completion_notice(hdc, rect)
 
     def draw_top_bar(self, hdc, rect):
         title_top = 6
@@ -1033,6 +1045,23 @@ class NativeWidget:
     def draw_connection(self, hdc, rect):
         self.draw_text(hdc, self.connection_text, RECT(12, rect.bottom - self.font_heights["small"] - 7, rect.right - 12, rect.bottom - 3), self.fonts["small"], "#94a3b8")
 
+    def draw_completion_notice(self, hdc, rect):
+        if not self.completion_notice_until or time.monotonic() >= self.completion_notice_until:
+            return
+        notice_height = max(42, self.font_heights["body"] + self.font_heights["small"] + 18)
+        left = 10
+        right = rect.right - 10
+        bottom = rect.bottom - 10
+        top = max(10, bottom - notice_height)
+        box = RECT(left, top, right, bottom)
+        brush = gdi32.CreateSolidBrush(rgb_hex("#14532d"))
+        user32.FillRect(hdc, ctypes.byref(box), brush)
+        gdi32.DeleteObject(brush)
+
+        self.draw_text(hdc, "打印完成", RECT(left + 12, top + 5, right - 12, top + self.font_heights["body"] + 12), self.fonts["body"], "#dcfce7")
+        text = self.completion_notice_text or self.config.get("printer_name", "Bambu")
+        self.draw_text(hdc, text, RECT(left + 12, top + self.font_heights["body"] + 14, right - 12, bottom - 5), self.fonts["small"], "#bbf7d0")
+
     def draw_text(self, hdc, text, rect, font, color, flags=DT_LEFT | DT_SINGLELINE | DT_END_ELLIPSIS):
         gdi32.SelectObject(hdc, font)
         gdi32.SetBkMode(hdc, TRANSPARENT)
@@ -1043,6 +1072,7 @@ class NativeWidget:
         if msg == WM_TIMER:
             changed = self.pump_events()
             self.reload_if_config_changed()
+            self.clear_expired_completion_notice()
             if time.monotonic() >= self.next_desktop_check:
                 self.ensure_desktop_parent()
                 self.next_desktop_check = time.monotonic() + 2.0
@@ -1105,6 +1135,8 @@ class NativeWidget:
             elif cmd == ID_MENU_RECONNECT:
                 self.reconnect()
                 user32.InvalidateRect(hwnd, None, True)
+            elif cmd == ID_MENU_TEST_COMPLETE:
+                self.test_completion_notice()
             elif cmd == ID_MENU_EXIT:
                 self.close()
                 user32.DestroyWindow(hwnd)
