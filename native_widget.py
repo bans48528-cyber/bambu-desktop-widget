@@ -68,10 +68,6 @@ SWP_NOACTIVATE = 0x0010
 SWP_FRAMECHANGED = 0x0020
 SWP_SHOWWINDOW = 0x0040
 
-MB_OK = 0x00000000
-MB_ICONINFORMATION = 0x00000040
-MB_SETFOREGROUND = 0x00010000
-
 HWND_TOP = 0
 ERROR_ALREADY_EXISTS = 183
 MUTEX_NAME = "Local\\BambuNativeWidget-6E318C1D-4BDB-4CC3-9D48-6FDC3B856E94"
@@ -94,6 +90,7 @@ TIMER_MAIN = 1
 ID_MENU_SETTINGS = 1001
 ID_MENU_RECONNECT = 1002
 ID_MENU_EXIT = 1003
+ID_MENU_TEST_COMPLETE = 1004
 LOG_PATH = APP_DIR / "startup.log"
 
 WNDPROC = ctypes.WINFUNCTYPE(
@@ -208,8 +205,6 @@ def configure_ctypes():
     user32.GetWindowRect.restype = wintypes.BOOL
     user32.GetClientRect.argtypes = [wintypes.HWND, ctypes.POINTER(RECT)]
     user32.GetClientRect.restype = wintypes.BOOL
-    user32.MessageBoxW.argtypes = [wintypes.HWND, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.UINT]
-    user32.MessageBoxW.restype = ctypes.c_int
     user32.SetLayeredWindowAttributes.argtypes = [wintypes.HWND, wintypes.COLORREF, wintypes.BYTE, wintypes.DWORD]
     user32.SetLayeredWindowAttributes.restype = wintypes.BOOL
     user32.ShowWindow.argtypes = [wintypes.HWND, ctypes.c_int]
@@ -733,13 +728,14 @@ class NativeWidget:
         job_name = str(status.get("job_name") or self.config.get("printer_name", "Bambu")).strip()
         if not job_name:
             job_name = self.config.get("printer_name", "Bambu")
+        script = APP_DIR / "completion_popup.py"
+        try:
+            subprocess.Popen([sys.executable, str(script), job_name], cwd=str(APP_DIR))
+        except OSError as exc:
+            log_event(f"completion popup failed: {type(exc).__name__}: {exc}")
+        return
         message = f"{job_name}\n\n打印已完成。"
         title = "打印完成"
-
-        def worker():
-            user32.MessageBoxW(None, message, title, MB_OK | MB_ICONINFORMATION | MB_SETFOREGROUND)
-
-        threading.Thread(target=worker, daemon=True).start()
 
     def handle_status_update(self, payload):
         current_state = str(payload.get("state") or "").upper()
@@ -941,12 +937,16 @@ class NativeWidget:
         script = APP_DIR / "settings_dialog.py"
         subprocess.Popen([sys.executable, str(script)], cwd=str(APP_DIR))
 
+    def test_completion_popup(self):
+        self.show_completion_popup({"job_name": "测试打印任务"})
+
     def show_menu(self, x, y):
         user32.SetForegroundWindow(self.hwnd)
         menu = user32.CreatePopupMenu()
         user32.AppendMenuW(menu, MF_STRING, ID_MENU_SETTINGS, "打开配置")
         user32.AppendMenuW(menu, MF_STRING, ID_MENU_RECONNECT, "重新连接")
         user32.AppendMenuW(menu, MF_STRING, ID_MENU_EXIT, "退出")
+        user32.AppendMenuW(menu, MF_STRING, ID_MENU_TEST_COMPLETE, "测试完成弹窗")
         user32.TrackPopupMenu(menu, TPM_RIGHTBUTTON, x, y, 0, self.hwnd, None)
         user32.DestroyMenu(menu)
 
@@ -1105,6 +1105,8 @@ class NativeWidget:
             elif cmd == ID_MENU_RECONNECT:
                 self.reconnect()
                 user32.InvalidateRect(hwnd, None, True)
+            elif cmd == ID_MENU_TEST_COMPLETE:
+                self.test_completion_popup()
             elif cmd == ID_MENU_EXIT:
                 self.close()
                 user32.DestroyWindow(hwnd)
